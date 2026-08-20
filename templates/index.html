@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>网站素材人脸排查工具</title>
+<style>
+:root{
+  --bg:#f5f6f8; --card:#fff; --text:#1f2328; --muted:#6b7280;
+  --line:#e3e6ea; --accent:#2f6f9f; --accent-soft:#eaf2f8;
+  --ok:#3d7a4e; --ok-bg:#eaf4ec; --warn:#9a6b25; --warn-bg:#fbf2e3; --err:#a3453b; --err-bg:#fbecea;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
+h1{font-size:22px;font-weight:600;margin:0 0 4px}
+.sub{color:var(--muted);margin-bottom:22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:18px}
+label{display:block;font-weight:500;margin-bottom:6px}
+input[type=text],input[type=number]{width:100%;padding:9px 11px;border:1px solid var(--line);
+  border-radius:7px;font-size:14px;background:#fff;color:var(--text)}
+input:focus{outline:none;border-color:var(--accent)}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.col{flex:1;min-width:240px}
+.drop{border:1.5px dashed #c6ccd3;border-radius:9px;padding:16px;text-align:center;cursor:pointer;
+  background:#fafbfc;transition:.15s}
+.drop:hover{border-color:var(--accent);background:var(--accent-soft)}
+.drop img{max-height:120px;border-radius:7px;margin-top:8px}
+.hint{color:var(--muted);font-size:12.5px}
+button{border:none;border-radius:7px;padding:10px 20px;font-size:14px;cursor:pointer;font-weight:500}
+.btn-main{background:var(--accent);color:#fff}
+.btn-main:disabled{background:#a9bccb;cursor:not-allowed}
+.btn-ghost{background:#fff;border:1px solid var(--line);color:var(--text)}
+.adv{margin-top:14px;font-size:13px}
+summary{cursor:pointer;color:var(--muted)}
+.bar{height:8px;background:#e9edf1;border-radius:5px;overflow:hidden;margin:10px 0}
+.bar>i{display:block;height:100%;background:var(--accent);width:0;transition:.4s}
+.stats{display:flex;gap:22px;flex-wrap:wrap;color:var(--muted);font-size:13px}
+.stats b{color:var(--text);font-weight:600}
+.log{background:#f7f8fa;border:1px solid var(--line);border-radius:7px;padding:10px 12px;
+  height:150px;overflow:auto;font:12px/1.7 Consolas,monospace;color:#4b5563;margin-top:12px}
+.hit{display:flex;gap:14px;padding:14px;border:1px solid var(--line);border-radius:9px;margin-bottom:12px;background:#fff}
+.hit img{width:120px;height:120px;object-fit:cover;border-radius:7px;border:1px solid var(--line);background:#f0f2f4;flex-shrink:0}
+.hit .meta{flex:1;min-width:0}
+.score{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12.5px;font-weight:600;margin-bottom:6px}
+.s-high{background:var(--err-bg);color:var(--err)}
+.s-mid{background:var(--warn-bg);color:var(--warn)}
+.s-low{background:var(--ok-bg);color:var(--ok)}
+.urls a{display:block;color:var(--accent);text-decoration:none;font-size:13px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.urls a:hover{text-decoration:underline}
+.imgurl{font-size:12.5px;color:var(--muted);word-break:break-all;margin-bottom:6px}
+.empty{text-align:center;color:var(--muted);padding:26px}
+.tag{display:inline-block;background:var(--accent-soft);color:var(--accent);
+  padding:1px 8px;border-radius:5px;font-size:12px;margin-left:6px}
+.err{background:var(--err-bg);color:var(--err);padding:10px 12px;border-radius:7px;margin-top:10px}
+.head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+.kinds{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap}
+.kind{font-size:12px;color:var(--accent);background:var(--accent-soft);padding:3px 9px;
+  border-radius:5px;cursor:pointer;border:1px solid transparent}
+.kind:hover{border-color:var(--accent)}
+.modes{display:flex;gap:8px;flex-wrap:wrap}
+.mode{flex:1;min-width:120px;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+  cursor:pointer;background:#fff;transition:.15s}
+.mode:hover{border-color:var(--accent)}
+.mode.sel{border-color:var(--accent);background:var(--accent-soft)}
+.mode b{display:block;font-size:13px;font-weight:600;margin-bottom:2px}
+.mode.sel b{color:var(--accent)}
+.mode span{font-size:12px;color:var(--muted);line-height:1.45;display:block}
+.kindtag{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11.5px;
+  background:var(--accent-soft);color:var(--accent);margin-left:6px;font-weight:500}
+.badge{display:inline-block;padding:2px 9px;border-radius:5px;font-size:12px;font-weight:500;margin-left:6px}
+.b-ali{background:var(--warn-bg);color:var(--warn)}
+.b-gen{background:var(--ok-bg);color:var(--ok)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>网站素材人脸排查工具</h1>
+  <div class="sub">上传一张人物照片 + 网站链接，自动扫描全站图片，找出含该人物的素材与所在页面</div>
+
+  <div class="card" id="form-card">
+    <div class="row">
+      <div class="col">
+        <label>1. 上传参考图片</label>
+        <div class="drop" id="drop">
+          <div id="drop-tip">点击选择图片，或拖拽到此处<div class="hint" id="drop-hint">人像照建议正面、清晰、单人；支持 jpg/png/webp</div></div>
+          <img id="preview" style="display:none">
+        </div>
+        <input type="file" id="photo" accept="image/*" hidden>
+        <label style="margin-top:14px">识别模式</label>
+        <div class="modes">
+          <div class="mode sel" data-m="face">
+            <b>人脸识别</b><span>找含某个人的照片，认脸不认图</span>
+          </div>
+          <div class="mode" data-m="image">
+            <b>图片相似</b><span>找某张图本身，可查无人像素材</span>
+          </div>
+          <div class="mode" data-m="both">
+            <b>两者都查</b><span>人脸与图片同时比对，耗时较长</span>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <label>2. 要检索的网站</label>
+        <input type="text" id="site" placeholder="www.hdfocusds.com" value="www.hdfocusds.com">
+        <div class="hint" style="margin-top:6px" id="site-hint">支持独立站与阿里国际站店铺，自动识别类型</div>
+        <div class="kinds">
+          <span class="kind" data-v="www.hdfocusds.com">独立站示例</span>
+          <span class="kind" data-v="hd-focus.en.alibaba.com">国际站店铺示例</span>
+        </div>
+        <details class="adv">
+          <summary>高级参数</summary>
+          <div class="row" style="margin-top:10px">
+            <div class="col"><label style="font-size:13px">相似度阈值</label>
+              <input type="number" id="threshold" value="0.363" step="0.01" min="0.2" max="0.99">
+              <div class="hint" id="th-hint">0.363 为同一人标准阈值</div></div>
+            <div class="col"><label style="font-size:13px">最大页面数</label>
+              <input type="number" id="max_pages" value="3000">
+              <div class="hint">上限保护，够大即可全站扫</div></div>
+            <div class="col"><label style="font-size:13px">最大图片数</label>
+              <input type="number" id="max_images" value="30000"></div>
+          </div>
+        </details>
+      </div>
+    </div>
+    <div style="margin-top:18px">
+      <button class="btn-main" id="go">开始扫描</button>
+      <span class="hint" id="tip" style="margin-left:10px"></span>
+    </div>
+    <div class="err" id="form-err" style="display:none"></div>
+  </div>
+
+  <div class="card" id="progress-card" style="display:none">
+    <div class="head">
+      <div><b id="stage">准备中</b><span class="tag" id="site-tag"></span><span id="type-badge"></span></div>
+      <button class="btn-ghost" id="cancel">停止</button>
+    </div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="stats">
+      <span id="lbl-page">页面 <b id="p-page">0/0</b></span>
+      <span>图片 <b id="p-img">0/0</b></span>
+      <span>含人脸 <b id="p-face">0</b></span>
+      <span>命中 <b id="p-hit">0</b></span>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="card" id="result-card" style="display:none">
+    <div class="head">
+      <b>命中清单 <span id="hit-count" class="tag">0</span></b>
+      <button class="btn-ghost" id="export">导出 Excel</button>
+    </div>
+    <div id="hits" style="margin-top:14px"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let jobId = null, timer = null;
+
+let curMode = 'face';
+const MODE_TH = {face:'0.363', image:'0.80', both:'0.363'};
+document.querySelectorAll('.mode').forEach(el => {
+  el.onclick = () => {
+    document.querySelectorAll('.mode').forEach(x => x.classList.remove('sel'));
+    el.classList.add('sel');
+    curMode = el.dataset.m;
+    $('threshold').value = MODE_TH[curMode];
+    $('th-hint').textContent = curMode === 'face'
+      ? '0.363 为同一人标准阈值' : '0.80 为同一素材，调低可找更多变体';
+    $('drop-hint').textContent = curMode === 'face'
+      ? '人像照建议正面、清晰、单人；支持 jpg/png/webp'
+      : '上传要查找的那张图，可以是产品图、场景图等任意素材';
+  };
+});
+
+document.querySelectorAll('.kind').forEach(el => {
+  el.onclick = () => { $('site').value = el.dataset.v; updateSiteHint(); };
+});
+$('site').oninput = updateSiteHint;
+function updateSiteHint(){
+  const v = $('site').value.trim();
+  const isAli = /\.en\.alibaba\.com/i.test(v);
+  $('site-hint').innerHTML = isAli
+    ? '识别为<b>阿里国际站店铺</b>：将枚举店铺全部在架商品并扫描商品图'
+    : '识别为<b>普通网站</b>：将读取 sitemap 或爬取站内链接扫描全站图片';
+}
+updateSiteHint();
+
+$('drop').onclick = () => $('photo').click();
+$('drop').ondragover = e => { e.preventDefault(); };
+$('drop').ondrop = e => { e.preventDefault(); if (e.dataTransfer.files[0]) { $('photo').files = e.dataTransfer.files; showPreview(); } };
+$('photo').onchange = showPreview;
+function showPreview(){
+  const f = $('photo').files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = e => { $('preview').src = e.target.result; $('preview').style.display='inline-block'; $('drop-tip').style.display='none'; };
+  r.readAsDataURL(f);
+}
+
+$('go').onclick = async () => {
+  const f = $('photo').files[0], site = $('site').value.trim();
+  $('form-err').style.display='none';
+  if(!f) return showErr('请先上传参考照片');
+  if(!site) return showErr('请填写网站链接');
+  const fd = new FormData();
+  fd.append('photo', f); fd.append('site', site);
+  fd.append('mode', curMode);
+  fd.append('threshold', $('threshold').value);
+  fd.append('max_pages', $('max_pages').value);
+  fd.append('max_images', $('max_images').value);
+  $('go').disabled = true; $('tip').textContent = '正在启动任务…';
+  try{
+    const r = await fetch('/api/scan', {method:'POST', body:fd});
+    const d = await r.json();
+    if(d.error){ $('go').disabled=false; $('tip').textContent=''; return showErr(d.error); }
+    jobId = d.job_id;
+    $('progress-card').style.display='block';
+    $('site-tag').textContent = site;
+    $('tip').textContent = '';
+    timer = setInterval(poll, 1200); poll();
+  }catch(e){ $('go').disabled=false; showErr('请求失败：'+e.message); }
+};
+
+function showErr(m){ $('form-err').textContent = m; $('form-err').style.display='block'; }
+
+$('cancel').onclick = async () => { if(jobId) await fetch('/api/cancel/'+jobId,{method:'POST'}); };
+$('export').onclick = () => { if(jobId) location.href = '/api/export/'+jobId; };
+
+async function poll(){
+  if(!jobId) return;
+  const r = await fetch('/api/status/'+jobId); const d = await r.json();
+  $('stage').textContent = d.stage || '进行中';
+  $('bar').style.width = Math.min(d.progress||0, 100) + '%';
+  if(d.site_type === 'alibaba'){
+    $('type-badge').className = 'badge b-ali'; $('type-badge').textContent = '国际站店铺';
+    $('lbl-page').innerHTML = `商品 <b id="p-page">${d.done_pages||0}/${d.total_pages||0}</b>`;
+  } else if(d.site_type === 'generic'){
+    $('type-badge').className = 'badge b-gen'; $('type-badge').textContent = '普通网站';
+    $('lbl-page').innerHTML = `页面 <b id="p-page">${d.done_pages||0}/${d.total_pages||0}</b>`;
+  }
+  $('p-page').textContent = `${d.done_pages||0}/${d.total_pages||0}`;
+  $('p-img').textContent  = `${d.done_images||0}/${d.total_images||0}`;
+  $('p-face').textContent = d.faces_found||0;
+  $('p-hit').textContent  = (d.hits||[]).length;
+  $('log').innerHTML = (d.logs||[]).slice(-60).join('<br>');
+  $('log').scrollTop = $('log').scrollHeight;
+  renderHits(d.hits||[]);
+  if(d.status==='done' || d.status==='error' || d.status==='canceled'){
+    clearInterval(timer); $('go').disabled=false;
+    if(d.status==='error') showErr(d.error||'任务失败');
+  }
+}
+
+function renderHits(hits){
+  $('hit-count').textContent = hits.length;
+  if(hits.length) $('result-card').style.display='block';
+  if(!hits.length){ $('hits').innerHTML = '<div class="empty">暂无命中</div>'; return; }
+  $('hits').innerHTML = hits.map(h=>{
+    const isImg = h.kind && h.kind !== '人脸匹配';
+    // 图片模式与人脸模式的分数含义不同，判读标准分开
+    const cls = isImg
+      ? (h.score>=0.90 ? 's-high' : (h.score>=0.80 ? 's-mid':'s-low'))
+      : (h.score>=0.50 ? 's-high' : (h.score>=0.40 ? 's-mid':'s-low'));
+    const level = isImg
+      ? (h.score>=0.90 ? '高度吻合' : (h.score>=0.80 ? '很可能':'疑似'))
+      : (h.score>=0.50 ? '高度相似' : (h.score>=0.40 ? '较相似':'疑似'));
+    const kindTag = h.kind ? `<span class="kindtag">${h.kind}</span>` : '';
+    return `<div class="hit">
+      <img src="${h.image_url}" loading="lazy" referrerpolicy="no-referrer">
+      <div class="meta">
+        <span class="score ${cls}">${level} · ${h.score}</span>${kindTag}
+        <div class="imgurl"><a href="${h.image_url}" target="_blank" style="color:inherit">${h.image_url}</a></div>
+        <div class="hint">出现在 ${h.pages.length} 个页面：</div>
+        <div class="urls">${h.pages.slice(0,6).map(p=>`<a href="${p}" target="_blank">${p}</a>`).join('')}
+        ${h.pages.length>6?`<span class="hint">…另有 ${h.pages.length-6} 个页面</span>`:''}</div>
+      </div></div>`;
+  }).join('');
+}
+</script>
+</body>
+</html>
