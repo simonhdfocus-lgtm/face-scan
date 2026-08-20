@@ -16,10 +16,16 @@ COPY . .
 ENV MODEL_DIR=/tmp/models \
     UPLOAD_DIR=/tmp/uploads \
     PORT=7860 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    LOW_MEM=1 \
+    MAX_SIDE=900 \
+    MAX_WORKERS=3 \
+    OPENCV_OPENCL_RUNTIME=disabled \
+    OMP_NUM_THREADS=1
 
 EXPOSE 7860
 
-# 单 worker + 多线程：任务状态存在进程内存中，多 worker 会导致轮询不到任务
-CMD ["gunicorn", "-w", "1", "--threads", "16", "-b", "0.0.0.0:7860", \
+# 单 worker + 少量线程：任务状态存在进程内存中，多 worker 会导致轮询不到任务；
+# 线程数过多在 512MB 环境下容易 OOM
+CMD ["gunicorn", "-w", "1", "--threads", "4", "-b", "0.0.0.0:7860", \
      "--timeout", "0", "app:app"]

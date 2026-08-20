@@ -5,6 +5,7 @@ sitemap/BFS 收集全站页面 -> 提取图片 -> 人脸检测与比对 -> 命�
 """
 import os
 import re
+import gc
 import hashlib
 import threading
 import time
@@ -57,6 +58,12 @@ SKIP_EXT = ('.pdf', '.zip', '.rar', '.doc', '.docx', '.xls', '.xlsx', '.mp4', '.
 
 _model_lock = threading.Lock()
 
+# 低内存环境（如云端免费层 512MB）需要收紧并发与图片尺寸
+LOW_MEM = os.environ.get('LOW_MEM', '0') == '1'
+MAX_SIDE = int(os.environ.get('MAX_SIDE', '900' if LOW_MEM else '1600'))
+MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '3' if LOW_MEM else '12'))
+MAX_IMG_BYTES = int(os.environ.get('MAX_IMG_BYTES', '6000000'))
+
 
 # ---------------- 人脸模型 ----------------
 class FaceEngine:
@@ -65,10 +72,11 @@ class FaceEngine:
         self.det = cv2.FaceDetectorYN.create(MODEL_DET, '', (320, 320), 0.7, 0.3, 5000)
         self.rec = cv2.FaceRecognizerSF.create(MODEL_REC, '')
 
-    def features(self, img, max_side=1600):
+    def features(self, img, max_side=None):
         """返回图中所有人脸的特征向量列表"""
         if img is None:
             return []
+        max_side = max_side or MAX_SIDE
         h, w = img.shape[:2]
         if max(h, w) > max_side:  # 限制尺寸，兼顾速度与精度
             s = max_side / max(h, w)
@@ -385,6 +393,7 @@ def _collect_generic_images(pages, img_map, lock, job, log, stopped, workers):
             if done_pages % 10 == 0 or done_pages == len(pages):
                 log(f'已解析 {done_pages}/{len(pages)} 个页面，累计发现 {len(img_map)} 张图片')
 
+    workers = min(workers, MAX_WORKERS)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(handle_page, pages))
 
@@ -414,6 +423,8 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
             content = r.content
             if len(content) < 2000:      # 太小的图（图标等）跳过
                 raise ValueError('too small')
+            if len(content) > MAX_IMG_BYTES:   # 超大图跳过，防止内存溢出
+                raise ValueError('too large')
             md5 = hashlib.md5(content).hexdigest()
             with lock:
                 if md5 in seen_md5:
@@ -421,8 +432,15 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
                 seen_md5.add(md5)
             arr = np.frombuffer(content, dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            del content, arr, r
             if img is None:
                 raise ValueError('decode failed')
+            # 低内存环境先缩图再处理，避免大图占满内存
+            ih, iw = img.shape[:2]
+            if max(ih, iw) > MAX_SIDE:
+                sc = MAX_SIDE / max(ih, iw)
+                img = cv2.resize(img, (int(iw * sc), int(ih * sc)),
+                                 interpolation=cv2.INTER_AREA)
 
             best, kind, detail, nface = 0.0, '', None, 0
 
@@ -455,6 +473,7 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
                         'detail': detail,
                     })
                     log(f'★ 命中[{kind}] {best:.3f} → {iu.split("/")[-1][:48]}')
+            del img
         except Exception:
             pass
         finally:
@@ -467,7 +486,11 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
                 if checked % 25 == 0 or checked == len(items):
                     extra = f'，含人脸 {faces_total} 张' if need_face else ''
                     log(f'已检测 {checked}/{len(items)} 张图片{extra}，命中 {len(hits)} 张')
+                # 低内存环境定期回收，避免容器被 OOM 杀掉
+                if LOW_MEM and checked % 20 == 0:
+                    gc.collect()
 
+    workers = min(workers, MAX_WORKERS)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         list(ex.map(handle_img, items))
 
