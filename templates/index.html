@@ -277,9 +277,11 @@ async function poll(){
     const r = await fetch('/api/status/'+jobId);
     if(r.status === 404){
       // 任务不在服务端（容器重启或已过期）
-      $('net-tip').textContent = '任务已丢失（服务可能重启过），请重新发起扫描';
+      $('net-tip').textContent = '上次任务因服务重启已中断，请重新发起扫描'
+        + '（若站点图片很多，建议调低「最大页面数」分批扫描）';
       $('net-tip').style.display = 'block';
       stopTracking();
+      loadJobs();            // 同步刷新列表，避免与实际状态不一致
       return;
     }
     d = await r.json();
@@ -307,6 +309,11 @@ async function poll(){
   $('p-img').textContent  = `${d.done_images||0}/${d.total_images||0}`;
   $('p-face').textContent = d.faces_found||0;
   $('p-hit').textContent  = (d.hits||[]).length;
+  if(d.truncated){
+    $('net-tip').textContent = `图片数量超出云端处理上限，本次跳过 ${d.truncated} 张。`
+      + '完整扫描建议用本地版，或调低「最大页面数」分批扫。';
+    $('net-tip').style.display = 'block';
+  }
   $('log').innerHTML = (d.logs||[]).slice(-60).join('<br>');
   $('log').scrollTop = $('log').scrollHeight;
   // 每 20 次轮询（约 30 秒）刷新一次任务列表

@@ -78,6 +78,9 @@ LOW_MEM = os.environ.get('LOW_MEM', '0') == '1'
 MAX_SIDE = int(os.environ.get('MAX_SIDE', '900' if LOW_MEM else '1600'))
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '3' if LOW_MEM else '12'))
 MAX_IMG_BYTES = int(os.environ.get('MAX_IMG_BYTES', '6000000'))
+# 低内存环境下单次任务的图片数硬上限：图片索引与命中记录常驻内存，
+# 数量过大会累积到超出容器限制。超出时截断并在日志中提示。
+HARD_MAX_IMAGES = int(os.environ.get('HARD_MAX_IMAGES', '2000' if LOW_MEM else '30000'))
 
 # 同时执行的扫描任务数上限。低内存环境必须串行，否则多人同时扫会撑爆内存；
 # 超出的任务不会被拒绝，而是排队等待。
@@ -298,7 +301,10 @@ def _run_scan_inner(ref_image_path, site_url, job, threshold=0.363,
     """
     def log(msg):
         job['logs'].append(f'[{time.strftime("%H:%M:%S")}] {msg}')
-        job['logs'] = job['logs'][-300:]
+        # 低内存环境少留日志；切片会复制列表，用 del 原地裁剪更省
+        keep = 80 if LOW_MEM else 300
+        if len(job['logs']) > keep * 2:
+            del job['logs'][:-keep]
 
     def stopped():
         return job.get('cancel', False)
@@ -449,9 +455,18 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
                  need_face, need_image, threshold,
                  job, log, stopped, workers, lock):
     """下载图片并按所选模式做比对"""
-    items = list(img_map.values())[:max_images]
+    limit = min(max_images, HARD_MAX_IMAGES)
+    total_found = len(img_map)
+    items = list(img_map.values())[:limit]
+    img_map.clear()          # 索引已转成列表，及时释放
+    gc.collect()
     job['total_images'] = len(items)
-    log(f'去重后待检测图片 {len(items)} 张')
+    if total_found > limit:
+        job['truncated'] = total_found - limit
+        log(f'共发现 {total_found} 张图片，受内存限制本次检测前 {limit} 张'
+            f'（未检测 {total_found - limit} 张，可分批扫描或改用本地版）')
+    else:
+        log(f'去重后待检测图片 {len(items)} 张')
 
     stage_name = {(True, False): '人脸检测与比对',
                   (False, True): '图片相似比对',
@@ -465,6 +480,7 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
         if stopped():
             return
         iu = rec['url']
+        new_hit = False
         try:
             r = fetch(iu, timeout=25, is_binary=True)
             content = r.content
@@ -519,6 +535,7 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
                         'kind': kind,
                         'detail': detail,
                     })
+                    new_hit = True
                     log(f'★ 命中[{kind}] {best:.3f} → {iu.split("/")[-1][:48]}')
             del img
         except Exception:
@@ -528,13 +545,15 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
                 checked += 1
                 job['done_images'] = checked
                 job['faces_found'] = faces_total
-                job['hits'] = sorted(hits, key=lambda x: -x['score'])
+                # 命中列表每 10 张才重排一次，避免每张图都产生一份排序副本
+                if new_hit or checked % 10 == 0:
+                    job['hits'] = sorted(hits, key=lambda x: -x['score'])
                 job['progress'] = round(40 + checked / max(len(items), 1) * 60, 1)
                 if checked % 25 == 0 or checked == len(items):
                     extra = f'，含人脸 {faces_total} 张' if need_face else ''
                     log(f'已检测 {checked}/{len(items)} 张图片{extra}，命中 {len(hits)} 张')
                 # 低内存环境定期回收，避免容器被 OOM 杀掉
-                if LOW_MEM and checked % 20 == 0:
+                if LOW_MEM and checked % 10 == 0:
                     gc.collect()
 
     workers = min(workers, MAX_WORKERS)
