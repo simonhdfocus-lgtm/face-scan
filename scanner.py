@@ -57,12 +57,34 @@ SKIP_EXT = ('.pdf', '.zip', '.rar', '.doc', '.docx', '.xls', '.xlsx', '.mp4', '.
             '.mp3', '.exe', '.svg', '.ico', '.css', '.js')
 
 _model_lock = threading.Lock()
+_engine_lock = threading.Lock()
+_shared_engine = None
+
+
+def get_engine():
+    """
+    全局共享一个人脸模型实例。
+    模型约 37MB，每个任务各加载一份会在低内存环境直接撑爆内存。
+    实际比对时已有 _model_lock 保证线程安全，共享不会出错。
+    """
+    global _shared_engine
+    with _engine_lock:
+        if _shared_engine is None:
+            _shared_engine = FaceEngine()
+        return _shared_engine
 
 # 低内存环境（如云端免费层 512MB）需要收紧并发与图片尺寸
 LOW_MEM = os.environ.get('LOW_MEM', '0') == '1'
 MAX_SIDE = int(os.environ.get('MAX_SIDE', '900' if LOW_MEM else '1600'))
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '3' if LOW_MEM else '12'))
 MAX_IMG_BYTES = int(os.environ.get('MAX_IMG_BYTES', '6000000'))
+
+# 同时执行的扫描任务数上限。低内存环境必须串行，否则多人同时扫会撑爆内存；
+# 超出的任务不会被拒绝，而是排队等待。
+MAX_CONCURRENT = int(os.environ.get('MAX_CONCURRENT', '1' if LOW_MEM else '3'))
+_task_slot = threading.Semaphore(MAX_CONCURRENT)
+_queue_lock = threading.Lock()
+_waiting = 0
 
 
 # ---------------- 人脸模型 ----------------
@@ -244,6 +266,31 @@ def canonical_img(u):
 # ---------------- 主扫描流程 ----------------
 def run_scan(ref_image_path, site_url, job, threshold=0.363,
              max_pages=3000, max_images=30000, workers=8, mode='face'):
+    """对外入口：先排队拿到执行名额，再真正开扫"""
+    global _waiting
+    with _queue_lock:
+        _waiting += 1
+        ahead = _waiting - 1
+    if not _task_slot.acquire(blocking=False):
+        # 前面有任务在跑，本任务进入等待
+        job['stage'] = f'排队中（前面还有 {ahead} 个任务）'
+        job['queued'] = True
+        job['logs'].append(
+            f'[{time.strftime("%H:%M:%S")}] 当前有其他扫描正在进行，已排队等待')
+        _task_slot.acquire()
+    job['queued'] = False
+    try:
+        return _run_scan_inner(ref_image_path, site_url, job, threshold,
+                               max_pages, max_images, workers, mode)
+    finally:
+        _task_slot.release()
+        with _queue_lock:
+            _waiting -= 1
+        gc.collect()
+
+
+def _run_scan_inner(ref_image_path, site_url, job, threshold=0.363,
+                    max_pages=3000, max_images=30000, workers=8, mode='face'):
     """
     job: dict，用于向前端汇报进度；含 log/progress/status/results 等字段
     threshold: 相似度阈值。人脸模式 0.363（SFace 官方推荐），图片模式建议 0.80
@@ -268,7 +315,7 @@ def run_scan(ref_image_path, site_url, job, threshold=0.363,
         job['error'] = '参考图片无法读取，请换一张 jpg/png 格式的图片'
         return
 
-    engine = FaceEngine() if need_face else None
+    engine = get_engine() if need_face else None
     ref_feat = None
     if need_face:
         ref_feats = engine.features(ref_img)

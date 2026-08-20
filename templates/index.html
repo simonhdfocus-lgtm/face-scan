@@ -234,6 +234,8 @@ async function poll(){
   const r = await fetch('/api/status/'+jobId); const d = await r.json();
   $('stage').textContent = d.stage || '进行中';
   $('bar').style.width = Math.min(d.progress||0, 100) + '%';
+  // 排队中用琥珀色区分，让用户知道是在等待而非卡住
+  $('bar').style.background = d.queued ? 'var(--warn)' : 'var(--accent)';
   if(d.site_type === 'alibaba'){
     $('type-badge').className = 'badge b-ali'; $('type-badge').textContent = '国际站店铺';
     $('lbl-page').innerHTML = `商品 <b id="p-page">${d.done_pages||0}/${d.total_pages||0}</b>`;

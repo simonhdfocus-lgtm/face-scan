@@ -37,6 +37,12 @@ def start_job(job_id, ref_path, site, threshold, max_pages, max_images, mode='fa
         job['status'] = 'error'
         job['error'] = f'{e}'
         job['logs'].append('错误：' + traceback.format_exc()[-500:])
+    finally:
+        # 参考图用完即删，不长期留存
+        try:
+            os.remove(ref_path)
+        except OSError:
+            pass
 
 
 @app.route('/')
@@ -86,6 +92,12 @@ def api_scan():
         'ref_file': os.path.basename(ref_path),
         'detail_images': detail_images,
     }
+    # 只保留最近若干个任务，避免历史结果长期占用内存
+    if len(JOBS) > 12:
+        for old in sorted(JOBS, key=lambda k: JOBS[k].get('started', ''))[:-12]:
+            if JOBS[old].get('status') != 'running':
+                JOBS.pop(old, None)
+
     t = threading.Thread(target=start_job,
                          args=(job_id, ref_path, site, threshold,
                                max_pages, max_images, mode),
