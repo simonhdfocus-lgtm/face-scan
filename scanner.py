@@ -78,9 +78,9 @@ LOW_MEM = os.environ.get('LOW_MEM', '0') == '1'
 MAX_SIDE = int(os.environ.get('MAX_SIDE', '900' if LOW_MEM else '1600'))
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '3' if LOW_MEM else '12'))
 MAX_IMG_BYTES = int(os.environ.get('MAX_IMG_BYTES', '6000000'))
-# 低内存环境下单次任务的图片数硬上限：图片索引与命中记录常驻内存，
-# 数量过大会累积到超出容器限制。超出时截断并在日志中提示。
-HARD_MAX_IMAGES = int(os.environ.get('HARD_MAX_IMAGES', '2000' if LOW_MEM else '30000'))
+# 单批处理的图片数。超过此数量会自动分批依次处理，每批结束释放内存，
+# 使内存占用与站点规模无关——再大的站也能完整扫完。
+BATCH_SIZE = int(os.environ.get('BATCH_SIZE', '600' if LOW_MEM else '5000'))
 
 # 同时执行的扫描任务数上限。低内存环境必须串行，否则多人同时扫会撑爆内存；
 # 超出的任务不会被拒绝，而是排队等待。
@@ -445,6 +445,8 @@ def _collect_generic_images(pages, img_map, lock, job, log, stopped, workers):
             job['progress'] = round(done_pages / max(len(pages), 1) * 40, 1)
             if done_pages % 10 == 0 or done_pages == len(pages):
                 log(f'已解析 {done_pages}/{len(pages)} 个页面，累计发现 {len(img_map)} 张图片')
+            if LOW_MEM and done_pages % 50 == 0:
+                gc.collect()
 
     workers = min(workers, MAX_WORKERS)
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -454,19 +456,25 @@ def _collect_generic_images(pages, img_map, lock, job, log, stopped, workers):
 def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
                  need_face, need_image, threshold,
                  job, log, stopped, workers, lock):
-    """下载图片并按所选模式做比对"""
-    limit = min(max_images, HARD_MAX_IMAGES)
-    total_found = len(img_map)
-    items = list(img_map.values())[:limit]
+    """
+    下载图片并按所选模式做比对。
+
+    图片数量超过单批上限时自动分批：每批处理完释放该批占用的内存再进入下一批，
+    命中结果跨批累积。这样无论站点多大都能全部扫完，而不是丢弃超出的部分。
+    """
+    items = list(img_map.values())[:max_images]
     img_map.clear()          # 索引已转成列表，及时释放
     gc.collect()
-    job['total_images'] = len(items)
-    if total_found > limit:
-        job['truncated'] = total_found - limit
-        log(f'共发现 {total_found} 张图片，受内存限制本次检测前 {limit} 张'
-            f'（未检测 {total_found - limit} 张，可分批扫描或改用本地版）')
+    total = len(items)
+    job['total_images'] = total
+
+    batch_size = max(1, BATCH_SIZE if total > BATCH_SIZE else total)
+    n_batch = max(1, (total + batch_size - 1) // batch_size)
+    job['total_batches'] = n_batch
+    if n_batch > 1:
+        log(f'去重后待检测图片 {total} 张，将分 {n_batch} 批依次处理（每批 {batch_size} 张）')
     else:
-        log(f'去重后待检测图片 {len(items)} 张')
+        log(f'去重后待检测图片 {total} 张')
 
     stage_name = {(True, False): '人脸检测与比对',
                   (False, True): '图片相似比对',
@@ -548,20 +556,39 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
                 # 命中列表每 10 张才重排一次，避免每张图都产生一份排序副本
                 if new_hit or checked % 10 == 0:
                     job['hits'] = sorted(hits, key=lambda x: -x['score'])
-                job['progress'] = round(40 + checked / max(len(items), 1) * 60, 1)
-                if checked % 25 == 0 or checked == len(items):
+                job['progress'] = round(40 + checked / max(total, 1) * 60, 1)
+                if checked % 25 == 0 or checked == total:
                     extra = f'，含人脸 {faces_total} 张' if need_face else ''
-                    log(f'已检测 {checked}/{len(items)} 张图片{extra}，命中 {len(hits)} 张')
+                    log(f'已检测 {checked}/{total} 张图片{extra}，命中 {len(hits)} 张')
                 # 低内存环境定期回收，避免容器被 OOM 杀掉
                 if LOW_MEM and checked % 10 == 0:
                     gc.collect()
 
     workers = min(workers, MAX_WORKERS)
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        list(ex.map(handle_img, items))
+    for bi in range(n_batch):
+        if stopped():
+            log('已手动停止')
+            break
+        batch = items[bi * batch_size:(bi + 1) * batch_size]
+        if not batch:
+            break
+        job['cur_batch'] = bi + 1
+        if n_batch > 1:
+            job['stage'] = f'{stage_name}（第 {bi + 1}/{n_batch} 批）'
+            log(f'--- 开始第 {bi + 1}/{n_batch} 批，本批 {len(batch)} 张 ---')
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(handle_img, batch))
+        # 本批结束：释放该批数据与去重缓存，保证内存不跨批累积
+        items[bi * batch_size:(bi + 1) * batch_size] = [None] * len(batch)
+        del batch
+        if LOW_MEM and len(seen_md5) > 4000:
+            seen_md5.clear()
+        gc.collect()
+        if n_batch > 1:
+            log(f'--- 第 {bi + 1}/{n_batch} 批完成，累计命中 {len(hits)} 张 ---')
 
     job['hits'] = sorted(hits, key=lambda x: -x['score'])
     job['progress'] = 100
     job['stage'] = '已完成'
     job['status'] = 'done'
-    log(f'扫描完成：{job.get("total_pages", 0)} 个页面 / {len(items)} 张图片 / 命中 {len(hits)} 张')
+    log(f'扫描完成：{job.get("total_pages", 0)} 个页面 / {checked} 张图片 / 命中 {len(hits)} 张')
