@@ -92,10 +92,11 @@ def api_scan():
         'ref_file': os.path.basename(ref_path),
         'detail_images': detail_images,
     }
-    # 只保留最近若干个任务，避免历史结果长期占用内存
-    if len(JOBS) > 12:
-        for old in sorted(JOBS, key=lambda k: JOBS[k].get('started', ''))[:-12]:
-            if JOBS[old].get('status') != 'running':
+    # 只保留最近若干个任务，避免历史结果长期占用内存；
+    # 运行中和排队中的任务永不清理
+    if len(JOBS) > 20:
+        for old in sorted(JOBS, key=lambda k: JOBS[k].get('started', ''))[:-20]:
+            if JOBS[old].get('status') not in ('running',):
                 JOBS.pop(old, None)
 
     t = threading.Thread(target=start_job,
@@ -113,6 +114,26 @@ def api_status(job_id):
         return jsonify({'error': '任务不存在'}), 404
     skip = ('cancel', 'detail_images', 'product_ids')
     return jsonify({k: v for k, v in job.items() if k not in skip})
+
+
+@app.route('/api/jobs')
+def api_jobs():
+    """最近的扫描任务列表，供前端恢复与回看"""
+    out = []
+    for jid, j in JOBS.items():
+        out.append({
+            'id': jid,
+            'site': j.get('site', ''),
+            'mode': j.get('mode', 'face'),
+            'status': j.get('status', ''),
+            'stage': j.get('stage', ''),
+            'progress': j.get('progress', 0),
+            'hits': len(j.get('hits', [])),
+            'started': j.get('started', ''),
+            'queued': j.get('queued', False),
+        })
+    out.sort(key=lambda x: x['started'], reverse=True)
+    return jsonify({'jobs': out[:12]})
 
 
 @app.route('/api/cancel/<job_id>', methods=['POST'])

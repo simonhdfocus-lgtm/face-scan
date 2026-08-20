@@ -60,6 +60,21 @@ summary{cursor:pointer;color:var(--muted)}
 .kind{font-size:12px;color:var(--accent);background:var(--accent-soft);padding:3px 9px;
   border-radius:5px;cursor:pointer;border:1px solid transparent}
 .kind:hover{border-color:var(--accent)}
+.nettip{background:var(--warn-bg);color:var(--warn);padding:7px 11px;border-radius:6px;
+  font-size:12.5px;margin:8px 0}
+.job{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;
+  cursor:pointer;background:#fff;transition:.15s}
+.job:hover{border-color:var(--accent);background:var(--accent-soft)}
+.job.j-cur{border-color:var(--accent);background:var(--accent-soft)}
+.j-main{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
+.j-main b{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.j-mode{font-size:11.5px;color:var(--accent);background:var(--accent-soft);
+  padding:1px 7px;border-radius:4px;flex-shrink:0}
+.j-meta{display:flex;gap:14px;font-size:12px;color:var(--muted);flex-shrink:0}
+.j-run{color:var(--accent);font-weight:500}
+.j-done{color:var(--ok);font-weight:500}
+.j-other{color:var(--muted)}
 .modes{display:flex;gap:8px;flex-wrap:wrap}
 .mode{flex:1;min-width:120px;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
   cursor:pointer;background:#fff;transition:.15s}
@@ -137,6 +152,7 @@ summary{cursor:pointer;color:var(--muted)}
       <div><b id="stage">准备中</b><span class="tag" id="site-tag"></span><span id="type-badge"></span></div>
       <button class="btn-ghost" id="cancel">停止</button>
     </div>
+    <div class="nettip" id="net-tip" style="display:none"></div>
     <div class="bar"><i id="bar"></i></div>
     <div class="stats">
       <span id="lbl-page">页面 <b id="p-page">0/0</b></span>
@@ -145,6 +161,12 @@ summary{cursor:pointer;color:var(--muted)}
       <span>命中 <b id="p-hit">0</b></span>
     </div>
     <div class="log" id="log"></div>
+  </div>
+
+  <div class="card" id="jobs-card" style="display:none">
+    <div class="head"><b>最近扫描</b>
+      <span class="hint">扫描在服务器后台运行，关闭页面不影响；点击可回看</span></div>
+    <div id="jobs" style="margin-top:12px"></div>
   </div>
 
   <div class="card" id="result-card" style="display:none">
@@ -216,22 +238,60 @@ $('go').onclick = async () => {
     const r = await fetch('/api/scan', {method:'POST', body:fd});
     const d = await r.json();
     if(d.error){ $('go').disabled=false; $('tip').textContent=''; return showErr(d.error); }
-    jobId = d.job_id;
-    $('progress-card').style.display='block';
-    $('site-tag').textContent = site;
+    startTracking(d.job_id, site);
     $('tip').textContent = '';
-    timer = setInterval(poll, 1200); poll();
   }catch(e){ $('go').disabled=false; showErr('请求失败：'+e.message); }
 };
 
 function showErr(m){ $('form-err').textContent = m; $('form-err').style.display='block'; }
 
-$('cancel').onclick = async () => { if(jobId) await fetch('/api/cancel/'+jobId,{method:'POST'}); };
+// 记住当前任务，刷新或重开页面后可自动恢复
+function startTracking(id, site){
+  jobId = id;
+  try{ localStorage.setItem('faceScanJob', id); }catch(e){}
+  $('progress-card').style.display='block';
+  $('site-tag').textContent = site || '';
+  $('go').disabled = true;
+  if(timer) clearInterval(timer);
+  timer = setInterval(poll, 1500);
+  poll();
+}
+
+function stopTracking(){
+  if(timer) clearInterval(timer);
+  timer = null;
+  $('go').disabled = false;
+  try{ localStorage.removeItem('faceScanJob'); }catch(e){}
+}
+
+$('cancel').onclick = async () => {
+  if(jobId) await fetch('/api/cancel/'+jobId,{method:'POST'});
+};
 $('export').onclick = () => { if(jobId) location.href = '/api/export/'+jobId; };
 
+let failCount = 0, pollTick = 0;
 async function poll(){
   if(!jobId) return;
-  const r = await fetch('/api/status/'+jobId); const d = await r.json();
+  let d;
+  try{
+    const r = await fetch('/api/status/'+jobId);
+    if(r.status === 404){
+      // 任务不在服务端（容器重启或已过期）
+      $('net-tip').textContent = '任务已丢失（服务可能重启过），请重新发起扫描';
+      $('net-tip').style.display = 'block';
+      stopTracking();
+      return;
+    }
+    d = await r.json();
+    failCount = 0;
+    $('net-tip').style.display = 'none';
+  }catch(e){
+    // 网络瞬断不清空界面，持续重试
+    failCount++;
+    $('net-tip').textContent = `连接中断，正在重试…（第 ${failCount} 次，任务仍在服务器后台运行）`;
+    $('net-tip').style.display = 'block';
+    return;
+  }
   $('stage').textContent = d.stage || '进行中';
   $('bar').style.width = Math.min(d.progress||0, 100) + '%';
   // 排队中用琥珀色区分，让用户知道是在等待而非卡住
@@ -249,12 +309,66 @@ async function poll(){
   $('p-hit').textContent  = (d.hits||[]).length;
   $('log').innerHTML = (d.logs||[]).slice(-60).join('<br>');
   $('log').scrollTop = $('log').scrollHeight;
+  // 每 20 次轮询（约 30 秒）刷新一次任务列表
+  if((pollTick++ % 20) === 0) loadJobs();
   renderHits(d.hits||[]);
   if(d.status==='done' || d.status==='error' || d.status==='canceled'){
-    clearInterval(timer); $('go').disabled=false;
+    stopTracking();
     if(d.status==='error') showErr(d.error||'任务失败');
+    loadJobs();
   }
 }
+
+// 最近任务列表：可回看历史结果，也可点回正在跑的任务
+async function loadJobs(){
+  try{
+    const r = await fetch('/api/jobs');
+    const d = await r.json();
+    const list = d.jobs||[];
+    if(!list.length){ $('jobs-card').style.display='none'; return; }
+    $('jobs-card').style.display='block';
+    $('jobs').innerHTML = list.map(j=>{
+      const st = j.status==='done' ? '已完成'
+               : j.status==='running' ? (j.queued?'排队中':`进行中 ${j.progress}%`)
+               : j.status==='error' ? '失败' : j.status==='canceled' ? '已取消' : j.status;
+      const cls = j.status==='running' ? 'j-run' : (j.status==='done' ? 'j-done':'j-other');
+      const modeTxt = {face:'人脸',image:'图片',both:'人脸+图片'}[j.mode]||j.mode;
+      const cur = j.id===jobId ? ' j-cur' : '';
+      return `<div class="job${cur}" onclick="openJob('${j.id}','${j.site}')">
+        <div class="j-main"><b>${j.site}</b><span class="j-mode">${modeTxt}</span></div>
+        <div class="j-meta"><span class="${cls}">${st}</span>
+          <span>命中 ${j.hits}</span><span>${(j.started||'').slice(5,16)}</span></div>
+      </div>`;
+    }).join('');
+  }catch(e){}
+}
+
+// 点击历史任务，切回查看
+window.openJob = function(id, site){
+  $('progress-card').style.display='block';
+  startTracking(id, site);
+  $('progress-card').scrollIntoView({behavior:'smooth', block:'center'});
+};
+
+// 页面加载时自动恢复上次的任务
+(async function restore(){
+  loadJobs();
+  let saved = null;
+  try{ saved = localStorage.getItem('faceScanJob'); }catch(e){}
+  if(!saved) return;
+  try{
+    const r = await fetch('/api/status/'+saved);
+    if(r.status === 404){ try{ localStorage.removeItem('faceScanJob'); }catch(e){} return; }
+    const d = await r.json();
+    $('progress-card').style.display='block';
+    startTracking(saved, d.site||'');
+    if(d.status==='running'){
+      $('net-tip').textContent = '已自动恢复上次未完成的扫描任务';
+      $('net-tip').style.display='block';
+      setTimeout(()=>{ $('net-tip').style.display='none'; }, 6000);
+    }
+  }catch(e){}
+})();
 
 function renderHits(hits){
   $('hit-count').textContent = hits.length;
