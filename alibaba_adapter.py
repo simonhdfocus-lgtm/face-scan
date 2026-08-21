@@ -124,13 +124,26 @@ def fetch_product_list(root, company_id, module_id, page_id, log=print, max_prod
             log(f'店铺共 {total} 个商品，每页 {per} 个')
 
         if not lst:
+            # 空列表有两种情况：(1)真的没有商品了；(2)限流返回空。
+            # 用页码判断：若当前页 × 每页数 < 总数，则视为限流，跳过并加入补抓
+            per = nav.get('pageLines') or 16
+            expected_total = total or 0
+            if expected_total > 0 and cur * per < expected_total:
+                log(f'第 {cur} 页返回空列表（可能被限流），加入补抓队列')
+                failed_pages.append(cur)
+                cur += 1
+                continue
+            # 确认已无更多商品
             break
 
         products.extend(_parse_products(lst))
 
         log(f'已获取商品列表 {len(products)}/{total or "?"}')
-        if len(products) >= (total or 0) or len(products) >= max_products:
+        # 只有累计数量已达到或超过期望总数才停止
+        if len(products) >= max_products:
             break
+        if total and len(products) + len(failed_pages) * per >= total:
+            break   # 正常页 + 待补抓页已覆盖全量
         cur += 1
         if cur > 200:
             break
@@ -146,14 +159,16 @@ def fetch_product_list(root, company_id, module_id, page_id, log=print, max_prod
                 'sortType': 'modified-desc', 'isGallery': 'Y', 'curPage': pg,
             }
             ok = False
-            for attempt in range(6):
+            for attempt in range(8):
                 try:
-                    time.sleep(2 + attempt * 4)
+                    time.sleep(1 + attempt * 3)
                     r = requests.get(api, params=params, headers=HEADERS, timeout=30)
-                    lst = r.json()['moduleData']['data'].get('productList') or []
-                    products.extend(_parse_products(lst))
-                    ok = True
-                    break
+                    d2 = r.json()
+                    lst = d2['moduleData']['data'].get('productList') or []
+                    if lst:   # 非空才算成功，空列表继续重试
+                        products.extend(_parse_products(lst))
+                        ok = True
+                        break
                 except Exception:
                     continue
             if not ok:
