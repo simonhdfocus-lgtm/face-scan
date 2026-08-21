@@ -116,13 +116,6 @@ def api_status(job_id):
     return jsonify({k: v for k, v in job.items() if k not in skip})
 
 
-@app.route('/api/debug-ali')
-def api_debug_ali():
-    """临时诊断：查看云端访问阿里店铺页的真实返回"""
-    import debug_ali
-    return jsonify(debug_ali.probe())
-
-
 @app.route('/api/jobs')
 def api_jobs():
     """最近的扫描任务列表，供前端恢复与回看"""

@@ -3,7 +3,12 @@
 离职员工素材排查引擎
 sitemap/BFS 收集全站页面 -> 提取图片 -> 人脸检测与比对 -> 命中清单
 """
-import os
+import os, sys
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in [os.path.join(_HERE, 'libs'), _HERE]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import re
 import gc
 import hashlib
@@ -486,6 +491,9 @@ def _scan_images(img_map, max_images, engine, ref_feat, ref_sig,
     def handle_img(rec):
         nonlocal checked, faces_total
         if stopped():
+            with lock:
+                checked += 1
+                job['done_images'] = checked
             return
         iu = rec['url']
         new_hit = False
